@@ -1692,7 +1692,7 @@ a:hover { text-decoration: underline; }
             <span class="pulse-dot"></span> Listening...
           </div>
           <button class="composer-btn" id="voice-btn" title="Voice input" aria-label="Voice input">
-            🎤
+           <i class="fa-duotone fa-regular fa-microphone"></i>
           </button>
           <button class="composer-btn send-btn" id="send-btn" title="Send message" aria-label="Send message" disabled>
             ➤
@@ -2815,20 +2815,49 @@ function renderMarkdown(text) {
 }
 
 function addCodeCopyButtons(container) {
-  // Code copy buttons are already added via the custom renderer
+  const btn = container.querySelector('.code-copy-btn');
+  if (btn) {
+    btn.addEventListener('click', () => window._kgpt.copyCode(btn));
+  }
 }
 
 function copyCode(btn) {
   const wrapper = btn.closest('.code-block-wrapper');
   const code = wrapper.querySelector('code').textContent;
-  navigator.clipboard.writeText(code).then(() => {
+
+  const onSuccess = () => {
     btn.classList.add('copied');
     btn.innerHTML = '✓ Copied';
     setTimeout(() => {
       btn.classList.remove('copied');
       btn.innerHTML = '📋 Copy';
     }, 2000);
-  });
+  };
+
+  // Modern secure contexts (HTTPS/Localhost)
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(code).then(onSuccess).catch(err => {
+      console.error('Clipboard API failed', err);
+    });
+  } else {
+    // Fallback for file:// or non-secure contexts
+    const textArea = document.createElement('textarea');
+    textArea.value = code;
+    // Hide the textarea off-screen
+    textArea.style.position = 'absolute';
+    textArea.style.left = '-999999px';
+    document.body.prepend(textArea);
+    textArea.select();
+    
+    try {
+      document.execCommand('copy');
+      onSuccess();
+    } catch (error) {
+      console.error('Fallback copy failed', error);
+    } finally {
+      textArea.remove();
+    }
+  }
 }
 
 function buildMessageActions(msgId, content) {
@@ -2837,8 +2866,7 @@ function buildMessageActions(msgId, content) {
       <button class="msg-action-btn" onclick="window._kgpt.copyMessage('${msgId}')" title="Copy" aria-label="Copy message">📋 Copy</button>
       <button class="msg-action-btn" onclick="window._kgpt.regenerateMessage('${msgId}')" title="Regenerate" aria-label="Regenerate">🔄 Retry</button>
       <button class="msg-action-btn tts-btn" onclick="window._kgpt.speakMessage('${msgId}', this)" title="Read aloud" aria-label="Read aloud">🔊</button>
-      <button class="msg-action-btn" onclick="window._kgpt.likeMessage('${msgId}', this)" title="Like" aria-label="Like">👍</button>
-      <button class="msg-action-btn" onclick="window._kgpt.dislikeMessage('${msgId}', this)" title="Dislike" aria-label="Dislike">👎</button>
+
     </div>`;
 }
 
@@ -2860,14 +2888,7 @@ function speakMessage(msgId, btn) {
   speakText(msg.content, btn);
 }
 
-function likeMessage(msgId, btn) {
-  btn.classList.toggle('active');
-  // Send feedback to backend if needed
-}
 
-function dislikeMessage(msgId, btn) {
-  btn.classList.toggle('active');
-}
 
 async function regenerateMessage(msgId) {
   if (state.isStreaming) return;
@@ -3473,8 +3494,7 @@ window._kgpt = {
   copyMessage,
   regenerateMessage: regenerateMessage,
   speakMessage,
-  likeMessage,
-  dislikeMessage,
+
 };
 
 // Boot

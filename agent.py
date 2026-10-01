@@ -43,6 +43,11 @@ Rules:
 - Use calculator for math questions.
 - When using web search, summarize the answer and mention that the answer is based on web search results.
 - Be clear, helpful, and concise.
+
+Formatting rules:
+- Never use LaTeX or math markup (no \[ \], \( \), \frac, \times).
+- Write math in plain text, like: 342 × 4,234 ÷ 3 = 482,676.
+- For calculations, show short numbered steps, then the final answer in bold on its own line.
 """
 
 def normalize_model_name(model_name:str):
