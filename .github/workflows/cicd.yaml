@@ -1,4 +1,4 @@
-name: Streamlit AWS CI/CD
+name: KaleemGPT AWS CI/CD
 
 on:
   push:
@@ -12,11 +12,16 @@ on:
 
 # Prevent two deployments from running at the same time
 concurrency:
-  group: agentic-chatbot-production
+  group: kaleemgpt-production
   cancel-in-progress: true
 
 permissions:
   contents: read
+
+# Shared by every job (available in shell steps as $CONTAINER_NAME / $APP_PORT)
+env:
+  CONTAINER_NAME: kaleemgpt
+  APP_PORT: "8080"
 
 jobs:
   # ============================================================
@@ -58,7 +63,9 @@ jobs:
         run: python -m compileall -q .
 
       - name: Import sanity check
-        run: python -c "import backend; print('backend.py imported OK')"
+        run: python -c "import app; print('app.py imported OK')"
+        # Catches missing packages (fastapi, python-multipart, jinja2...)
+        # before the image is built and deployed.
 
       - name: Run unit tests
         run: |
@@ -135,66 +142,38 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Validate application secrets
+      - name: Validate required secrets
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
-          SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         run: |
-          if [ -z "$GROQ_API_KEY" ]; then
-            echo "GROQ_API_KEY secret is missing."
-            exit 1
-          fi
-
           if [ -z "$GEMINI_API_KEY" ]; then
             echo "GEMINI_API_KEY secret is missing."
             exit 1
           fi
 
-          if [ -z "$TAVILY_API_KEY" ]; then
-            echo "TAVILY_API_KEY secret is missing."
-            exit 1
-          fi
+          echo "All required secrets are configured."
 
-          if [ -z "$SMTP_EMAIL" ]; then
-            echo "SMTP_EMAIL secret is missing."
-            exit 1
-          fi
-
-          if [ -z "$SMTP_PASSWORD" ]; then
-            echo "SMTP_PASSWORD secret is missing."
-            exit 1
-          fi
-
-          echo "All required application secrets are configured."
-
-      - name: Check optional LangSmith tracing secrets
+      - name: Check optional secrets
+        shell: bash
         env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           LANGSMITH_TRACING: ${{ secrets.LANGSMITH_TRACING }}
           LANGSMITH_ENDPOINT: ${{ secrets.LANGSMITH_ENDPOINT }}
           LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
           LANGSMITH_PROJECT: ${{ secrets.LANGSMITH_PROJECT }}
         run: |
-          # LangChain picks these up straight from the environment to enable
-          # tracing automatically — no app code depends on them, so a
-          # missing one only disables tracing, it doesn't fail the deploy.
-          if [ -z "$LANGSMITH_TRACING" ]; then
-            echo "::warning::LANGSMITH_TRACING secret is not set — tracing will be disabled."
-          fi
-
-          if [ -z "$LANGSMITH_ENDPOINT" ]; then
-            echo "::warning::LANGSMITH_ENDPOINT secret is not set — tracing will be disabled."
-          fi
-
-          if [ -z "$LANGSMITH_API_KEY" ]; then
-            echo "::warning::LANGSMITH_API_KEY secret is not set — tracing will be disabled."
-          fi
-
-          if [ -z "$LANGSMITH_PROJECT" ]; then
-            echo "::warning::LANGSMITH_PROJECT secret is not set — tracing will be disabled."
-          fi
+          # A missing optional secret only disables the feature that needs it
+          # (Groq models, web search, email tool, LangSmith tracing).
+          # It does not fail the deploy.
+          for name in GROQ_API_KEY TAVILY_API_KEY SMTP_EMAIL SMTP_PASSWORD \
+                      LANGSMITH_TRACING LANGSMITH_ENDPOINT LANGSMITH_API_KEY LANGSMITH_PROJECT; do
+            if [ -z "${!name}" ]; then
+              echo "::warning::$name secret is not set — features that depend on it will not work."
+            fi
+          done
 
       - name: Pull latest Docker image
         env:
@@ -204,14 +183,14 @@ jobs:
 
       - name: Stop and remove existing container
         run: |
-          docker rm -f stapp 2>/dev/null || true
+          docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 
-      - name: Run Streamlit container
+      - name: Run KaleemGPT container
         env:
           IMAGE_PATH: ${{ secrets.DOCKER_USERNAME }}/${{ secrets.IMAGE_NAME }}
 
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
           SMTP_EMAIL: ${{ secrets.SMTP_EMAIL }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
@@ -224,11 +203,12 @@ jobs:
         run: |
           docker run -d \
             --restart unless-stopped \
-            --name stapp \
-            -p 8501:8501 \
-            -v chatbot_data:/app/data \
-            -e GROQ_API_KEY \
+            --name "$CONTAINER_NAME" \
+            -p "${APP_PORT}:${APP_PORT}" \
+            -v kaleemgpt_data:/app/data \
+            -v kaleemgpt_uploads:/app/uploads \
             -e GEMINI_API_KEY \
+            -e GROQ_API_KEY \
             -e TAVILY_API_KEY \
             -e SMTP_EMAIL \
             -e SMTP_PASSWORD \
@@ -237,50 +217,53 @@ jobs:
             -e LANGSMITH_API_KEY \
             -e LANGSMITH_PROJECT \
             "${IMAGE_PATH}:main"
-          # -v chatbot_data:/app/data persists the sqlite checkpoint db and
-          # FAISS index across redeploys — Docker creates the named volume
-          # automatically on first run if it doesn't exist yet.
+          # kaleemgpt_data    -> /app/data    (chat database, vector index)
+          # kaleemgpt_uploads -> /app/uploads (uploaded documents)
+          # Named volumes survive redeploys; Docker creates them on first run.
+          # Separate names from the old Streamlit project so data never mixes.
 
       - name: Verify container is running
         run: |
           sleep 10
 
           if ! docker ps \
-            --filter "name=^stapp$" \
+            --filter "name=^${CONTAINER_NAME}$" \
             --filter "status=running" \
-            --format "{{.Names}}" | grep -q "^stapp$"; then
+            --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
 
-            echo "The Streamlit container failed to start."
-            docker logs stapp || true
+            echo "The KaleemGPT container failed to start."
+            docker logs "$CONTAINER_NAME" || true
             exit 1
           fi
 
-          echo "The Streamlit container is running."
-          docker ps --filter "name=^stapp$"
+          echo "The KaleemGPT container is running."
+          docker ps --filter "name=^${CONTAINER_NAME}$"
 
-      - name: Verify Streamlit health endpoint
+      - name: Verify application health
         run: |
+          # GET / renders templates/index.html, so this also proves the
+          # templates folder made it into the image.
           for attempt in $(seq 1 12); do
-            if docker exec stapp python -c \
-              "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=5)" \
+            if docker exec "$CONTAINER_NAME" python -c \
+              "import urllib.request; urllib.request.urlopen('http://localhost:${APP_PORT}/', timeout=5)" \
               >/dev/null 2>&1; then
 
-              echo "Streamlit application is healthy."
+              echo "KaleemGPT is healthy."
               exit 0
             fi
 
-            echo "Waiting for Streamlit to become ready..."
+            echo "Waiting for the app to become ready..."
             sleep 5
           done
 
-          echo "Streamlit did not become healthy."
-          docker logs --tail 100 stapp || true
+          echo "KaleemGPT did not become healthy."
+          docker logs --tail 100 "$CONTAINER_NAME" || true
           exit 1
 
       - name: Show recent application logs
         if: always()
         run: |
-          docker logs --tail 50 stapp 2>/dev/null || true
+          docker logs --tail 50 "$CONTAINER_NAME" 2>/dev/null || true
 
       - name: Remove unused Docker images
         if: always()
