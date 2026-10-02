@@ -94,12 +94,12 @@ def build_agent(model_name: str):
 
     workflow = StateGraph(MessagesState)
 
-    workflow.add_node("chatbot_node",chatbot_node)
-    workflow.add_node("tool_node",tool_node)
-
-    workflow.add_edge(START,"chatbot")
-    workflow.add_conditional_edges("chatbot",tools_condition)
-    workflow.add_edge("tools","chatbot")
+    workflow.add_node("chatbot", chatbot_node)
+    workflow.add_node("tools", tool_node)
+    
+    workflow.add_edge(START, "chatbot")
+    workflow.add_conditional_edges("chatbot", tools_condition)
+    workflow.add_edge("tools", "chatbot")
 
     conn = sqlite3.connect(
         "data/langgarph_checkpoints.sqlite",
