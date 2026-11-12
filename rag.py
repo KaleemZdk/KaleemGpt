@@ -1,103 +1,107 @@
-from pathlib import Path 
-from typing import List 
-from dotenv import load_dotenv 
-import os 
-import certifi 
+import logging
+import threading
+from pathlib import Path
 
-load_dotenv()
-
-os.environ["SSL_CERT_FILE"] = certifi.where()
-os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
-
-from langchain_chroma import Chroma
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from pypdf import PdfReader
-import docx2txt
+from config import CHROMA_DIR, has_env
 
-Path("uploads").mkdir(exist_ok=True)
-Path("chroma_db").mkdir(exist_ok=True)
+log = logging.getLogger(__name__)
 
-embeddings = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
+TEXT_SUFFIXES = {".txt", ".md", ".py", ".csv", ".json", ".js", ".ts", ".html", ".css", ".log", ".yaml", ".yml"}
+SUPPORTED_SUFFIXES = {".pdf", ".docx"} | TEXT_SUFFIXES
 
-vectorstore = Chroma(
-    collection_name="agent_chatbot_docs",
-    embedding_function=embeddings,
-    persist_directory="chroma_db"
-)
+_splitter = RecursiveCharacterTextSplitter(chunk_size=900, chunk_overlap=150)
 
-def read_file_text(file_path: str) -> str:
+_vectorstore = None
+_vs_lock = threading.Lock()
+
+
+def rag_available() -> bool:
+    return has_env("GEMINI_API_KEY") or has_env("GOOGLE_API_KEY")
+
+
+def get_vectorstore():
+    """Create the embedding client + Chroma collection lazily.
+
+    Building them at import time made the whole app crash on startup when the
+    Gemini key was missing, and slowed down every cold start.
+    """
+    global _vectorstore
+    if _vectorstore is None:
+        with _vs_lock:
+            if _vectorstore is None:
+                if not rag_available():
+                    raise RuntimeError("Document search needs GEMINI_API_KEY to be set.")
+                from langchain_chroma import Chroma
+                from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+                _vectorstore = Chroma(
+                    collection_name="agent_chatbot_docs",
+                    embedding_function=GoogleGenerativeAIEmbeddings(model="gemini-embedding-001"),
+                    persist_directory=str(CHROMA_DIR),
+                )
+    return _vectorstore
+
+
+def read_file_text(file_path: str | Path) -> str:
     path = Path(file_path)
     suffix = path.suffix.lower()
 
     if suffix == ".pdf":
-        reader = PdfReader(file_path)
-        text = ""
+        from pypdf import PdfReader
 
-        for page in reader.pages:
-            text += page.extract_text() or ""
-            text += "\n"
-
-        return text
+        reader = PdfReader(str(path))
+        return "\n".join((page.extract_text() or "") for page in reader.pages)
 
     if suffix == ".docx":
-        return docx2txt.process(file_path)
+        import docx2txt
 
-    if suffix in [".txt", ".md", ".py", ".csv"]:
+        return docx2txt.process(str(path))
+
+    if suffix in TEXT_SUFFIXES:
         return path.read_text(encoding="utf-8", errors="ignore")
 
-    raise ValueError("Unsupported file type. Upload PDF, DOCX, TXT, MD, PY, or CSV.")
+    raise ValueError("Unsupported file type.")
 
 
-def add_document_to_rag(file_path: str, thread_id: str):
+def add_document_to_rag(file_path: str | Path, thread_id: str, display_name: str | None = None) -> dict:
     text = read_file_text(file_path)
-
     if not text.strip():
-        raise ValueError("No text could be extracted from this file.")
+        raise ValueError("No text could be extracted from this file (is it a scanned PDF?).")
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=900,
-        chunk_overlap=150
-    )
-
-    chunks = splitter.split_text(text)
-
-    docs: List[Document] = [
-        Document(
-            page_content=chunk,
-            metadata={
-                "thread_id": thread_id,
-                "source": Path(file_path).name
-            }
-        )
-        for chunk in chunks
+    name = display_name or Path(file_path).name
+    chunks = _splitter.split_text(text)
+    docs = [
+        Document(page_content=chunk, metadata={"thread_id": thread_id, "source": name, "chunk": i})
+        for i, chunk in enumerate(chunks)
     ]
+    get_vectorstore().add_documents(docs)
+    return {"filename": name, "chunks": len(docs)}
 
-    vectorstore.add_documents(docs)
 
-    return {
-        "filename": Path(file_path).name,
-        "chunks": len(docs)
-    }
+def retrieve_from_rag(query: str, thread_id: str, k: int = 5) -> str:
+    if not rag_available():
+        return "Document search is not configured on this server."
 
-def retrieve_from_rag(query: str, thread_id: str, k: int = 4) -> str:
-    docs = vectorstore.similarity_search(
-        query,
-        k=k,
-        filter={"thread_id": thread_id}
+    docs = get_vectorstore().similarity_search(query, k=k, filter={"thread_id": thread_id})
+    if not docs:
+        return "No uploaded documents found in this conversation."
+
+    return "\n\n".join(
+        f"[Source {i}: {doc.metadata.get('source', 'uploaded document')}]\n{doc.page_content}"
+        for i, doc in enumerate(docs, start=1)
     )
 
-    if not docs:
-        return "No relevant uploaded document content found."
 
-    results = []
-
-    for i, doc in enumerate(docs, start=1):
-        source = doc.metadata.get("source", "uploaded document")
-        results.append(
-            f"[Source {i}: {source}]\n{doc.page_content}"
-        )
-
-    return "\n\n".join(results)
+def delete_thread_documents(thread_id: str) -> None:
+    if not rag_available():
+        return
+    try:
+        vs = get_vectorstore()
+        ids = vs.get(where={"thread_id": thread_id}).get("ids", [])
+        if ids:
+            vs.delete(ids=ids)
+    except Exception:  # never block a conversation delete on the vector store
+        log.exception("Failed to delete vectors for thread %s", thread_id)

@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# KaleemGPT runtime data (persisted via Docker volumes, never committed)
+data/
+uploads/
+chroma_db/
