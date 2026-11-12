@@ -22,6 +22,8 @@ from tool import tools
 # Models
 # ----------------------------------------------------------------------------
 
+# Verified against the live Groq / Gemini model lists (Nov 2026) with a tool-calling
+# smoke test. Every model here must support tool calling and streaming.
 MODELS = {
     "openai/gpt-oss-20b": {
         "name": "GPT-OSS 20B", "description": "Fast everyday model", "provider": "groq",
@@ -29,8 +31,15 @@ MODELS = {
     "openai/gpt-oss-120b": {
         "name": "GPT-OSS 120B", "description": "Smarter, a bit slower", "provider": "groq",
     },
-    "gemini-2.5-flash": {
-        "name": "Gemini 2.5 Flash", "description": "Google's fast multimodal model", "provider": "google",
+    "gemini-3-flash-preview": {
+        "name": "Gemini 3 Flash", "description": "Strong reasoning, preview release", "provider": "google",
+    },
+    "gemini-3.5-flash-lite": {
+        "name": "Gemini 3.5 Flash-Lite", "description": "Lightest, quickest Gemini", "provider": "google",
+    },
+    # Newest Gemini, but the free tier allows only ~20 requests/day and it is often overloaded.
+    "gemini-3.8-flash": {
+        "name": "Gemini 3.8 Flash", "description": "Newest Gemini, low free-tier daily limit", "provider": "google",
     },
 }
 
@@ -50,7 +59,8 @@ def available_models() -> list[dict]:
 
 
 def default_model() -> str:
-    preferred = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+    # DEFAULT_MODEL may name any model; GROQ_MODEL is the older name for the same setting.
+    preferred = (os.getenv("DEFAULT_MODEL") or os.getenv("GROQ_MODEL") or "").strip() or "openai/gpt-oss-20b"
     ids = [m["id"] for m in available_models()]
     if preferred in ids:
         return preferred
@@ -72,12 +82,16 @@ def make_llm(model_name: str):
         return ChatGoogleGenerativeAI(
             model=model_name,
             google_api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"),
-            temperature=0.6,
+            # Gemini 3+ is tuned for the default temperature (1.0); lowering it can cause loops.
+            # The default 6 retries made an overloaded model hang the chat for minutes.
+            max_retries=2,
+            timeout=90,
         )
 
     from langchain_groq import ChatGroq
 
-    return ChatGroq(model=model_name, groq_api_key=os.getenv("GROQ_API_KEY"), streaming=True, temperature=0.6)
+    return ChatGroq(model=model_name, groq_api_key=os.getenv("GROQ_API_KEY"), streaming=True, temperature=0.6,
+                    max_retries=2, timeout=90)
 
 
 # ----------------------------------------------------------------------------
@@ -145,6 +159,7 @@ Rules:
 - Be clear, helpful, and concise. Use markdown (headings, lists, tables, fenced code) when it helps readability.
 
 Formatting rules:
+- Never output bracket citation markers like 【1】 or 【source†L1-L3】. Cite only as markdown links, or name the source file.
 - Never use LaTeX or math markup (no \\[ \\], \\( \\), \\frac, \\times).
 - Write math in plain text, like: 342 × 4,234 ÷ 3 = 482,676.
 - For calculations, show short numbered steps, then the final answer in bold on its own line.

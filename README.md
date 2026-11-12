@@ -6,7 +6,7 @@ An agentic AI chat assistant built with **FastAPI + LangGraph**. It streams answ
 - **Chat with your documents**: upload PDF, DOCX, TXT, MD, CSV or code files (Chroma + Gemini embeddings)
 - **Remember things about you** across conversations (long-term memory)
 - **Do exact math** with a safe calculator tool
-- Switch between **models** (GPT-OSS 20B/120B on Groq, Gemini 2.5 Flash) and **agent modes** (General, Coding, Research, Document, Data)
+- Switch between **models** (GPT-OSS 20B/120B on Groq; Gemini 3.8 Flash, Gemini 3 Flash and Gemini 3.5 Flash-Lite on Google) and **agent modes** (General, Coding, Research, Document, Data)
 
 The UI includes chat history, search, rename/delete, regenerate, stop generation, markdown with syntax highlighting, voice input and read-aloud, dark/light themes, and a mobile layout.
 
@@ -23,7 +23,7 @@ Create a `.env` file in the project root:
 
 ```env
 GROQ_API_KEY=...        # GPT-OSS models (https://console.groq.com)
-GEMINI_API_KEY=...      # Gemini model + document upload/search (https://aistudio.google.com)
+GEMINI_API_KEY=...      # Gemini models + document upload/search (https://aistudio.google.com)
 TAVILY_API_KEY=...      # web search (https://tavily.com)
 ```
 
@@ -43,7 +43,7 @@ Open http://localhost:8080.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GROQ_MODEL` | `openai/gpt-oss-20b` | Default model |
+| `DEFAULT_MODEL` | `openai/gpt-oss-20b` | Default model (any id from the model menu; `GROQ_MODEL` still works) |
 | `DATA_DIR` | `./data` | SQLite DBs + Chroma vector index |
 | `UPLOAD_DIR` | `./uploads` | Uploaded files (one folder per conversation) |
 | `MAX_UPLOAD_MB` | `20` | Max upload size |

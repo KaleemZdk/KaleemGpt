@@ -382,10 +382,16 @@ def chat_stream(body: ChatRequest):
 def friendly_error(e: Exception) -> str:
     text = str(e)
     low = text.lower()
+    if ("429" in low or "resource_exhausted" in low) and ("per day" in low or "perday" in low):
+        return "This model's daily free quota is used up. Switch to another model, or try again tomorrow."
     if "rate limit" in low or "429" in low or "resource_exhausted" in low:
         return "The model provider is rate-limiting requests. Wait a moment and try again, or switch models."
     if "api key" in low or "401" in low or "unauthorized" in low:
         return "The model provider rejected the API key. Check the server configuration."
+    if "503" in low or "unavailable" in low or "high demand" in low or "overloaded" in low:
+        return "This model is overloaded right now. Try again in a moment, or switch to another model."
+    if "404" in low or "not_found" in low or "no longer available" in low or "decommissioned" in low:
+        return "This model is no longer offered by the provider. Pick another model from the menu."
     if "context" in low and "length" in low:
         return "This conversation is too long for the model. Start a new chat."
     return f"Something went wrong: {text[:300]}"

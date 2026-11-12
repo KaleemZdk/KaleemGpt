@@ -13,8 +13,10 @@ os.environ["DATA_DIR"] = str(_TMP / "data")
 os.environ["UPLOAD_DIR"] = str(_TMP / "uploads")
 os.environ["GROQ_API_KEY"] = "test-key"
 os.environ["GEMINI_API_KEY"] = "test-key"
-os.environ.pop("TAVILY_API_KEY", None)
-os.environ.pop("GROQ_MODEL", None)
+# Blank (not removed) so load_dotenv() in config.py can't refill them from a real .env.
+os.environ["TAVILY_API_KEY"] = ""
+os.environ["GOOGLE_API_KEY"] = ""
+os.environ["GROQ_MODEL"] = ""
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

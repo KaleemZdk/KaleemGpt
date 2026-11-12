@@ -49,7 +49,8 @@ def test_config_lists_models_and_agents(client):
 
 def test_app_imports_without_any_api_keys():
     """Missing TAVILY/GEMINI keys used to crash the app at import time."""
-    env = {k: v for k, v in os.environ.items() if not k.endswith("_API_KEY")}
+    env = {k: ("" if k.endswith("_API_KEY") else v) for k, v in os.environ.items()}
+    env.update({k: "" for k in ("GROQ_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "TAVILY_API_KEY")})
     env["DATA_DIR"] = os.environ["DATA_DIR"]
     out = subprocess.run(
         [sys.executable, "-c", "import app; from fastapi.testclient import TestClient; "
@@ -253,3 +254,27 @@ def test_dangling_tool_calls_are_dropped():
     out = drop_dangling_tool_calls(msgs)
     assert len(out) == 5
     assert all(getattr(m, "tool_calls", None) is None or m.tool_calls[0]["id"] == "ok" for m in out if isinstance(m, AIMessage) and m.tool_calls)
+
+
+def test_model_list_and_default(monkeypatch):
+    import agent
+
+    assert "gemini-2.5-flash" not in agent.MODELS  # retired by Google
+    ids = [m["id"] for m in agent.available_models()]
+    assert ids[:2] == ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]
+    assert "gemini-3.8-flash" in ids
+
+    monkeypatch.setenv("DEFAULT_MODEL", "gemini-3.8-flash")
+    assert agent.default_model() == "gemini-3.8-flash"
+    monkeypatch.setenv("DEFAULT_MODEL", "does-not-exist")
+    assert agent.default_model() == "openai/gpt-oss-20b"
+    # An unknown or retired model id from an old browser setting falls back to the default.
+    assert agent.normalize_model_name("gemini-2.5-flash") == "openai/gpt-oss-20b"
+
+
+def test_friendly_errors_for_provider_failures(app_module):
+    fe = app_module.friendly_error
+    assert "overloaded" in fe(Exception("503 UNAVAILABLE. high demand"))
+    assert "no longer offered" in fe(Exception("404 NOT_FOUND. This model is no longer available"))
+    assert "rate-limiting" in fe(Exception("429 RESOURCE_EXHAUSTED"))
+    assert "daily free quota" in fe(Exception("429 RESOURCE_EXHAUSTED. Generate content requests per day limit"))
